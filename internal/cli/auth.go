@@ -19,6 +19,13 @@ var authCmd = &cobra.Command{
 	Short: "Authentication commands",
 }
 
+var (
+	authFullHistorySync bool
+	authFullSyncDays    uint32
+	authFullSyncSizeMB  uint32
+	authInitialSyncWait time.Duration
+)
+
 var authLoginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate with WhatsApp via QR code and sync messages",
@@ -43,6 +50,10 @@ var authStatusCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(authCmd)
+	authLoginCmd.Flags().BoolVar(&authFullHistorySync, "full-history-sync", false, "Request a larger initial history sync while pairing a fresh linked device")
+	authLoginCmd.Flags().Uint32Var(&authFullSyncDays, "full-sync-days", 3650, "Number of days of history to request with --full-history-sync")
+	authLoginCmd.Flags().Uint32Var(&authFullSyncSizeMB, "full-sync-size-mb", 10240, "History sync size/storage quota in MB with --full-history-sync")
+	authLoginCmd.Flags().DurationVar(&authInitialSyncWait, "initial-sync-wait", 5*time.Minute, "How long to wait for initial history sync after QR login")
 	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authLogoutCmd)
 	authCmd.AddCommand(authStatusCmd)
@@ -59,6 +70,11 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 	defer db.CloseQuietly()
+
+	if authFullHistorySync {
+		whatsapp.ConfigureFullHistorySync(authFullSyncDays, authFullSyncSizeMB)
+		fmt.Fprintf(os.Stderr, "Full-history sync requested: days=%d size_mb=%d. Use a fresh --store for this; WhatsApp may still cap returned history.\n\n", authFullSyncDays, authFullSyncSizeMB)
+	}
 
 	// Create WhatsApp client
 	client, err := whatsapp.New(db, GetStoreDir(), IsVerbose(), nil)
@@ -96,7 +112,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(os.Stderr, "")
 
 	// Wait for initial sync (with timeout)
-	syncTimeout := 5 * time.Minute
+	syncTimeout := authInitialSyncWait
 	select {
 	case <-ctx.Done():
 		// User interrupted

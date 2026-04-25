@@ -62,22 +62,41 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) HistorySyncResult {
 
 	synced := 0
 	moreAvailable := false
-	for _, conv := range hs.Data.Conversations {
+	debugOnDemand := hs.Data.GetSyncType() == waHistorySync.HistorySync_ON_DEMAND
+	if debugOnDemand {
+		c.Logger.Info("on-demand history sync received", "sync_type", hs.Data.GetSyncType().String(), "conversations", len(hs.Data.Conversations), "progress", hs.Data.GetProgress(), "chunk_order", hs.Data.GetChunkOrder())
+	}
+	for convIndex, conv := range hs.Data.Conversations {
 		if conv == nil || conv.ID == nil {
 			continue
 		}
 
-		chatJID := *conv.ID
+		responseChatJID := *conv.ID
+		chatJID := backfillStorageChatJID(c.PendingBackfillJID, responseChatJID, debugOnDemand)
 		jid, err := types.ParseJID(chatJID)
 		if err != nil {
-			c.Logger.Warn("history sync: bad JID", "jid", chatJID, "err", err)
+			c.Logger.Warn("history sync: bad JID", "jid", chatJID, "response_jid", responseChatJID, "err", err)
 			continue
 		}
 
 		name := c.getChatName(jid.String(), chatJID, conv, "")
-		if conv.GetEndOfHistoryTransferType() == waHistorySync.Conversation_COMPLETE_BUT_MORE_MESSAGES_REMAIN_ON_PRIMARY ||
-			conv.GetEndOfHistoryTransferType() == waHistorySync.Conversation_COMPLETE_ON_DEMAND_SYNC_BUT_MORE_MSG_REMAIN_ON_PRIMARY {
+		endType := conv.GetEndOfHistoryTransferType()
+		if endType == waHistorySync.Conversation_COMPLETE_BUT_MORE_MESSAGES_REMAIN_ON_PRIMARY ||
+			endType == waHistorySync.Conversation_COMPLETE_ON_DEMAND_SYNC_BUT_MORE_MSG_REMAIN_ON_PRIMARY {
 			moreAvailable = true
+		}
+		if debugOnDemand {
+			c.Logger.Info(
+				"on-demand history sync conversation",
+				"index", convIndex,
+				"jid", chatJID,
+				"response_jid", responseChatJID,
+				"name", name,
+				"raw_messages", len(conv.Messages),
+				"end_of_history_transfer", conv.GetEndOfHistoryTransfer(),
+				"end_type", endType.String(),
+				"more_available", moreAvailable,
+			)
 		}
 
 		if len(conv.Messages) > 0 && conv.Messages[0] != nil && conv.Messages[0].Message != nil {
@@ -90,13 +109,18 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) HistorySyncResult {
 			}
 		}
 
-		for _, m := range conv.Messages {
+		for msgIndex, m := range conv.Messages {
 			if m == nil || m.Message == nil {
+				if debugOnDemand {
+					c.Logger.Info("on-demand history sync skipped message", "jid", chatJID, "index", msgIndex, "reason", "nil_history_message")
+				}
 				continue
 			}
 
 			var text string
+			kind := "nil"
 			if m.Message.Message != nil {
+				kind = messageDebugKind(m.Message.Message)
 				text = extractTextContent(m.Message.Message)
 			}
 
@@ -106,6 +130,13 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) HistorySyncResult {
 			}
 
 			if text == "" && mt == "" {
+				if debugOnDemand {
+					id := ""
+					if m.Message.Key != nil && m.Message.Key.ID != nil {
+						id = *m.Message.Key.ID
+					}
+					c.Logger.Info("on-demand history sync skipped message", "jid", chatJID, "index", msgIndex, "id", id, "kind", kind, "timestamp", m.Message.GetMessageTimestamp(), "reason", "no_text_or_media")
+				}
 				continue
 			}
 
@@ -156,6 +187,9 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) HistorySyncResult {
 
 			ts := m.Message.GetMessageTimestamp()
 			if ts == 0 {
+				if debugOnDemand {
+					c.Logger.Info("on-demand history sync skipped message", "jid", chatJID, "index", msgIndex, "id", id, "kind", kind, "reason", "zero_timestamp")
+				}
 				continue
 			}
 			t := time.Unix(int64(ts), 0)
@@ -175,6 +209,9 @@ func (c *Client) handleHistorySync(hs *events.HistorySync) HistorySyncResult {
 				continue
 			}
 			synced++
+			if debugOnDemand {
+				c.Logger.Info("on-demand history sync stored message", "jid", chatJID, "index", msgIndex, "id", id, "kind", kind, "timestamp", t, "sender", snd, "text_len", len(text), "media_type", mt)
+			}
 		}
 	}
 

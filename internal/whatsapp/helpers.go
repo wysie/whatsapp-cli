@@ -64,6 +64,45 @@ func extractTextContent(m *waE2E.Message) string {
 	return ""
 }
 
+func messageDebugKind(m *waE2E.Message) string {
+	if m == nil {
+		return "nil"
+	}
+
+	switch {
+	case m.GetConversation() != "":
+		return "conversation"
+	case m.GetExtendedTextMessage() != nil:
+		return "extended_text"
+	case m.GetImageMessage() != nil:
+		return "image"
+	case m.GetVideoMessage() != nil:
+		return "video"
+	case m.GetAudioMessage() != nil:
+		return "audio"
+	case m.GetDocumentMessage() != nil:
+		return "document"
+	case m.GetStickerMessage() != nil:
+		return "sticker"
+	case m.GetLocationMessage() != nil:
+		return "location"
+	case m.GetLiveLocationMessage() != nil:
+		return "live_location"
+	case m.GetContactMessage() != nil:
+		return "contact"
+	case m.GetContactsArrayMessage() != nil:
+		return "contacts_array"
+	case m.GetPollCreationMessage() != nil:
+		return "poll_creation"
+	case m.GetReactionMessage() != nil:
+		return "reaction"
+	case m.GetProtocolMessage() != nil:
+		return fmt.Sprintf("protocol:%s", m.GetProtocolMessage().GetType().String())
+	default:
+		return "unknown"
+	}
+}
+
 // extractMediaInfo extracts media information from a WhatsApp message.
 func extractMediaInfo(m *waE2E.Message) (mediaType, filename, url string, mediaKey, fileSHA256, fileEncSHA256 []byte, fileLength uint64) {
 	if m == nil {

@@ -41,6 +41,7 @@ type Client struct {
 	BaseDir             string
 	SyncComplete        chan struct{} // Signals when history sync is complete
 	OnDemandHistorySync chan HistorySyncResult
+	PendingBackfillJID  string // Storage JID to use for the next on-demand history response
 }
 
 // New creates a new WhatsApp client.
@@ -229,6 +230,7 @@ func (c *Client) RequestBackfill(jidStr string, count, pages int, wait time.Dura
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		c.Logger.Info("requesting backfill", "jid", jid.String(), "count", count, "page", page+1, "before_message_id", anchor.ID, "before_timestamp", anchor.Timestamp)
+		c.PendingBackfillJID = jid.String()
 		_, err = c.WA.SendPeerMessage(ctx, c.WA.BuildHistorySyncRequest(anchor, count))
 		cancel()
 		if err != nil {
@@ -238,12 +240,14 @@ func (c *Client) RequestBackfill(jidStr string, count, pages int, wait time.Dura
 
 		select {
 		case syncResult := <-c.OnDemandHistorySync:
+			c.PendingBackfillJID = ""
 			result.MessagesSynced += syncResult.MessagesSynced
 			result.MoreAvailable = syncResult.MoreAvailable
 			if syncResult.MessagesSynced == 0 || !syncResult.MoreAvailable {
 				return result, nil
 			}
 		case <-time.After(wait):
+			c.PendingBackfillJID = ""
 			return result, fmt.Errorf("timed out waiting for on-demand history sync after %s", wait)
 		}
 	}
