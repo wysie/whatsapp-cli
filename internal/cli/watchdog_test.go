@@ -35,3 +35,12 @@ func TestWatchdogDecisionAlertsWhenRestartDisabled(t *testing.T) {
 		t.Fatalf("expected alert when restart disabled, got %#v", decision)
 	}
 }
+
+func TestNewestSyncFreshnessTimeUsesHeartbeatWhenMessagesIdle(t *testing.T) {
+	oldMessage := time.Date(2026, 5, 8, 0, 0, 0, 0, time.UTC)
+	freshHeartbeat := time.Date(2026, 5, 8, 1, 30, 0, 0, time.UTC)
+	freshness := newestSyncFreshnessTime(&oldMessage, &freshHeartbeat)
+	if freshness == nil || !freshness.Equal(freshHeartbeat) {
+		t.Fatalf("expected fresh heartbeat to win over idle latest message, got %v", freshness)
+	}
+}

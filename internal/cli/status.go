@@ -132,18 +132,14 @@ func collectSyncStatus(staleAfter time.Duration) (SyncStatus, error) {
 		status.SyncProcessRunning = &running
 	}
 
+	freshness := newestSyncFreshnessTime(status.SyncHeartbeatAt, status.SyncLastEventAt, status.SyncLastMessageSeen)
 	if latest, ok, err := db.GetLatestMessageTime(); err == nil && ok {
 		status.LatestMessageTime = &latest
 		age := int64(time.Since(latest).Seconds())
 		status.LatestMessageAgeSec = &age
-		status.Stale = time.Since(latest) > staleAfter
-	} else {
-		status.Stale = true
+		freshness = newestSyncFreshnessTime(freshness, &latest)
 	}
-
-	if status.SyncHeartbeatAt != nil && time.Since(*status.SyncHeartbeatAt) > staleAfter {
-		status.Stale = true
-	}
+	status.Stale = freshness == nil || time.Since(*freshness) > staleAfter
 	if status.SyncLastError != "" || status.SyncState == "logged_out" || status.SyncState == "timeout" {
 		status.Healthy = false
 	} else {
@@ -151,6 +147,20 @@ func collectSyncStatus(staleAfter time.Duration) (SyncStatus, error) {
 		status.Healthy = authenticated && !status.Stale && processOK
 	}
 	return status, nil
+}
+
+func newestSyncFreshnessTime(values ...*time.Time) *time.Time {
+	var newest *time.Time
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		if newest == nil || value.After(*newest) {
+			v := *value
+			newest = &v
+		}
+	}
+	return newest
 }
 
 func metadataString(db *store.DB, key string) string {
