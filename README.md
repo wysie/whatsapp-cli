@@ -86,8 +86,39 @@ whatsapp auth status     # Show connection status and DB stats
 
 ```bash
 whatsapp sync            # One-time message sync
-whatsapp sync --follow   # Continuous sync (daemon mode)
+whatsapp sync --follow   # Continuous sync (daemon mode; reconnect is on by default)
 ```
+
+For long-running macOS `launchd` sync, keep the process alive even if it exits
+cleanly after a WhatsApp websocket reset. Use `KeepAlive=true`, not only
+`KeepAlive={SuccessfulExit=false}`; the latter will not restart a clean exit.
+
+Recommended `ProgramArguments`:
+
+```xml
+<key>KeepAlive</key>
+<true/>
+<key>ProgramArguments</key>
+<array>
+  <string>/opt/homebrew/bin/whatsapp</string>
+  <string>sync</string>
+  <string>--follow</string>
+  <string>--reconnect</string>
+  <string>--reconnect-delay</string>
+  <string>5s</string>
+  <string>--reconnect-max-delay</string>
+  <string>2m</string>
+  <string>--reconnect-check-interval</string>
+  <string>10s</string>
+  <string>--reconnect-stale-event-after</string>
+  <string>15m</string>
+  <string>--reconnect-max-attempts</string>
+  <string>0</string>
+</array>
+```
+
+`--reconnect-max-attempts 0` means retry forever. Keep an external watchdog as
+a backup, but it should stay quiet when the sync process is healthy or recovers.
 
 ### Chats & Messages
 
