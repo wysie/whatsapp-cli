@@ -8,7 +8,8 @@ require (
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.8.1
-	go.mau.fi/whatsmeow v0.0.0-20260421083005-5b8886176ff7
+	go.mau.fi/whatsmeow v0.0.0-20260506122147-6a7198d94d26
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -33,6 +34,5 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/term v0.42.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
