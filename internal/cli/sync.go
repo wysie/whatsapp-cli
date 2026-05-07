@@ -16,8 +16,14 @@ import (
 )
 
 var (
-	syncFollow        bool
-	syncDownloadMedia bool
+	syncFollow                   bool
+	syncDownloadMedia            bool
+	syncReconnect                bool
+	syncReconnectInitialDelay    time.Duration
+	syncReconnectMaxDelay        time.Duration
+	syncReconnectCheckInterval   time.Duration
+	syncReconnectStaleEventAfter time.Duration
+	syncReconnectMaxAttempts     int
 )
 
 var syncCmd = &cobra.Command{
@@ -34,6 +40,12 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 	syncCmd.Flags().BoolVar(&syncFollow, "follow", false, "Run continuously, syncing messages in real-time")
 	syncCmd.Flags().BoolVar(&syncDownloadMedia, "download-media", false, "Automatically download media files")
+	syncCmd.Flags().BoolVar(&syncReconnect, "reconnect", true, "Automatically reconnect in --follow mode when disconnected")
+	syncCmd.Flags().DurationVar(&syncReconnectInitialDelay, "reconnect-delay", 5*time.Second, "Initial reconnect backoff delay")
+	syncCmd.Flags().DurationVar(&syncReconnectMaxDelay, "reconnect-max-delay", 2*time.Minute, "Maximum reconnect backoff delay")
+	syncCmd.Flags().DurationVar(&syncReconnectCheckInterval, "reconnect-check-interval", 10*time.Second, "How often --follow checks connection health")
+	syncCmd.Flags().DurationVar(&syncReconnectStaleEventAfter, "reconnect-stale-event-after", 15*time.Minute, "Reconnect if no WhatsApp events are observed for this long; 0 disables event-stale reconnect")
+	syncCmd.Flags().IntVar(&syncReconnectMaxAttempts, "reconnect-max-attempts", 0, "Maximum reconnect attempts before exiting; 0 means unlimited")
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
@@ -81,13 +93,25 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	if syncFollow {
+		cfg := followReconnectConfig{
+			Enabled:         syncReconnect,
+			InitialDelay:    syncReconnectInitialDelay,
+			MaxDelay:        syncReconnectMaxDelay,
+			CheckInterval:   syncReconnectCheckInterval,
+			StaleEventAfter: syncReconnectStaleEventAfter,
+			MaxAttempts:     syncReconnectMaxAttempts,
+		}
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
 		fmt.Fprintln(os.Stderr, "Connected. Syncing messages continuously. Press Ctrl+C to stop.")
 		_ = db.SetMetadata("sync_state", "following")
 		stopHeartbeat := startSyncHeartbeat(db)
 		defer stopHeartbeat()
 
-		// Run until interrupted
-		<-ctx.Done()
+		if err := runFollowLoop(ctx, db, client, cfg); err != nil {
+			return err
+		}
 		_ = db.SetMetadata("sync_state", "stopped")
 		_ = db.SetMetadata("sync_stopped_at", time.Now().Format(time.RFC3339))
 	} else {
@@ -132,6 +156,60 @@ func syncModeName(follow bool) string {
 		return "follow"
 	}
 	return "once"
+}
+
+func runFollowLoop(ctx context.Context, db *store.DB, client *whatsapp.Client, cfg followReconnectConfig) error {
+	if !cfg.Enabled {
+		<-ctx.Done()
+		return nil
+	}
+
+	ticker := time.NewTicker(cfg.CheckInterval)
+	defer ticker.Stop()
+	attempt := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			needsReconnect := !client.IsConnected()
+			if !needsReconnect && cfg.StaleEventAfter > 0 {
+				if lastEvent := metadataTime(db, "sync_last_event_at"); lastEvent != nil && time.Since(*lastEvent) > cfg.StaleEventAfter {
+					needsReconnect = true
+					_ = db.SetMetadata("sync_last_error", "no WhatsApp events observed since "+lastEvent.Format(time.RFC3339))
+				}
+			}
+			if !needsReconnect {
+				attempt = 0
+				continue
+			}
+			attempt++
+			if cfg.MaxAttempts > 0 && attempt > cfg.MaxAttempts {
+				_ = db.SetMetadata("sync_state", "reconnect_failed")
+				return fmt.Errorf("maximum reconnect attempts reached")
+			}
+			delay := nextReconnectDelay(attempt, cfg.InitialDelay, cfg.MaxDelay)
+			_ = db.SetMetadata("sync_state", "reconnecting")
+			_ = db.SetMetadata("sync_reconnect_count", strconv.Itoa(attempt))
+			_ = db.SetMetadata("sync_last_reconnect_at", time.Now().Format(time.RFC3339))
+			fmt.Fprintf(os.Stderr, "WhatsApp connection unhealthy; reconnect attempt %d in %s...\n", attempt, delay)
+			client.Disconnect()
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(delay):
+			}
+			if err := client.Connect(); err != nil {
+				_ = db.SetMetadata("sync_last_error", err.Error())
+				fmt.Fprintf(os.Stderr, "Reconnect attempt %d failed: %v\n", attempt, err)
+				continue
+			}
+			_ = db.SetMetadata("sync_state", "connected")
+			_ = db.SetMetadata("sync_last_error", "")
+			fmt.Fprintln(os.Stderr, "Reconnected to WhatsApp.")
+			attempt = 0
+		}
+	}
 }
 
 func startSyncHeartbeat(db *store.DB) func() {

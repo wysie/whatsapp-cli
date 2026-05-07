@@ -14,12 +14,14 @@ import (
 const defaultDigestExcludeJID = "270240063738098@lid"
 
 var (
-	digestSince      string
-	digestAfter      string
-	digestBefore     string
-	digestExcludeJID []string
-	digestLimit      int
-	digestStaleAfter time.Duration
+	digestSince          string
+	digestAfter          string
+	digestBefore         string
+	digestExcludeJID     []string
+	digestLimit          int
+	digestStaleAfter     time.Duration
+	digestSummaryContext bool
+	digestMaxChars       int
 )
 
 var digestCmd = &cobra.Command{
@@ -39,6 +41,7 @@ type DigestCommandResult struct {
 	StaleAfterSeconds       int64              `json:"stale_after_seconds"`
 	LatestStoredMessageTime *time.Time         `json:"latest_stored_message_time,omitempty"`
 	Digest                  store.DigestResult `json:"digest"`
+	SummaryContext          string             `json:"summary_context,omitempty"`
 }
 
 func init() {
@@ -49,6 +52,8 @@ func init() {
 	digestCmd.Flags().StringSliceVar(&digestExcludeJID, "exclude", []string{defaultDigestExcludeJID}, "Chat JID to exclude; repeat or comma-separate")
 	digestCmd.Flags().IntVar(&digestLimit, "limit", 5000, "Maximum messages to include")
 	digestCmd.Flags().DurationVar(&digestStaleAfter, "stale-after", 15*time.Minute, "Mark output stale if newest stored message is older than this")
+	digestCmd.Flags().BoolVar(&digestSummaryContext, "summary-context", false, "Output a bounded high-signal text context for LLM daily summaries")
+	digestCmd.Flags().IntVar(&digestMaxChars, "max-chars", 30000, "Maximum characters for --summary-context output")
 }
 
 func runDigest(cmd *cobra.Command, args []string) error {
@@ -89,7 +94,14 @@ func runDigest(cmd *cobra.Command, args []string) error {
 		result.Stale = true
 	}
 	result.Healthy = !result.Stale
+	if digestSummaryContext {
+		result.SummaryContext = store.BuildDigestSummaryContext(digest, digestMaxChars)
+	}
 
+	if digestSummaryContext && GetFormat() == FormatHuman {
+		_, err := fmt.Fprint(os.Stdout, result.SummaryContext)
+		return err
+	}
 	if GetFormat() == FormatHuman {
 		return outputDigestHuman(result)
 	}
@@ -128,20 +140,44 @@ func digestWindow(now time.Time) (time.Time, time.Time, error) {
 }
 
 func outputDigestHuman(result DigestCommandResult) error {
-	fmt.Fprintf(os.Stdout, "WhatsApp Digest\n")
-	fmt.Fprintf(os.Stdout, "===============\n\n")
-	fmt.Fprintf(os.Stdout, "Window:   %s → %s\n", result.Digest.After.Format(time.RFC3339), result.Digest.Before.Format(time.RFC3339))
-	fmt.Fprintf(os.Stdout, "Healthy:  %v\n", result.Healthy)
-	fmt.Fprintf(os.Stdout, "Stale:    %v\n", result.Stale)
-	fmt.Fprintf(os.Stdout, "Chats:    %d\n", result.Digest.ChatCount)
-	fmt.Fprintf(os.Stdout, "Messages: %d\n", result.Digest.MessageCount)
+	write := func(format string, args ...any) error {
+		_, err := fmt.Fprintf(os.Stdout, format, args...)
+		return err
+	}
+	if err := write("WhatsApp Digest\n"); err != nil {
+		return err
+	}
+	if err := write("===============\n\n"); err != nil {
+		return err
+	}
+	if err := write("Window:   %s → %s\n", result.Digest.After.Format(time.RFC3339), result.Digest.Before.Format(time.RFC3339)); err != nil {
+		return err
+	}
+	if err := write("Healthy:  %v\n", result.Healthy); err != nil {
+		return err
+	}
+	if err := write("Stale:    %v\n", result.Stale); err != nil {
+		return err
+	}
+	if err := write("Chats:    %d\n", result.Digest.ChatCount); err != nil {
+		return err
+	}
+	if err := write("Messages: %d\n", result.Digest.MessageCount); err != nil {
+		return err
+	}
 	if result.LatestStoredMessageTime != nil {
-		fmt.Fprintf(os.Stdout, "Latest:   %s\n", result.LatestStoredMessageTime.Format(time.RFC3339))
+		if err := write("Latest:   %s\n", result.LatestStoredMessageTime.Format(time.RFC3339)); err != nil {
+			return err
+		}
 	}
 	if len(result.Digest.URLs) > 0 {
-		fmt.Fprintf(os.Stdout, "URLs:     %d\n", len(result.Digest.URLs))
+		if err := write("URLs:     %d\n", len(result.Digest.URLs)); err != nil {
+			return err
+		}
 	}
-	fmt.Fprintln(os.Stdout)
+	if _, err := fmt.Fprintln(os.Stdout); err != nil {
+		return err
+	}
 	for _, msg := range result.Digest.Messages {
 		chat := msg.ChatJID
 		if msg.ChatName != nil && *msg.ChatName != "" {
@@ -160,7 +196,9 @@ func outputDigestHuman(result DigestCommandResult) error {
 		if content == "" && msg.MediaType != nil {
 			content = "[" + *msg.MediaType + "]"
 		}
-		fmt.Fprintf(os.Stdout, "[%s] [%s] %s: %s\n", msg.Timestamp.Format(time.RFC3339), chat, sender, content)
+		if err := write("[%s] [%s] %s: %s\n", msg.Timestamp.Format(time.RFC3339), chat, sender, content); err != nil {
+			return err
+		}
 	}
 	return nil
 }

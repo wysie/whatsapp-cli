@@ -54,62 +54,9 @@ type SyncStatus struct {
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
-	if err := EnsureDirectories(); err != nil {
-		return fmt.Errorf("failed to create directories: %w", err)
-	}
-
-	db, err := store.Open(GetMessagesDBPath())
+	status, err := collectSyncStatus(statusStaleAfter)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer db.CloseQuietly()
-
-	client, err := whatsapp.New(db, GetStoreDir(), false, nil)
-	authenticated := err == nil && client.IsAuthenticated()
-
-	chatCount, _ := db.CountChats("")
-	msgCount, _ := db.CountMessages()
-	status := SyncStatus{
-		Authenticated:     authenticated,
-		StaleAfterSeconds: int64(statusStaleAfter.Seconds()),
-		Chats:             chatCount,
-		Messages:          msgCount,
-	}
-
-	status.SyncState = metadataString(db, "sync_state")
-	status.SyncMode = metadataString(db, "sync_mode")
-	status.SyncPID = metadataString(db, "sync_pid")
-	status.SyncLastError = metadataString(db, "sync_last_error")
-	status.SyncStartedAt = metadataTime(db, "sync_started_at")
-	status.SyncConnectedAt = metadataTime(db, "sync_connected_at")
-	status.SyncHeartbeatAt = metadataTime(db, "sync_heartbeat_at")
-	status.SyncLastEventAt = metadataTime(db, "sync_last_event_at")
-	status.SyncLastMessageSeen = metadataTime(db, "sync_last_message_seen_at")
-	status.SyncCompletedAt = metadataTime(db, "sync_completed_at")
-	status.SyncStoppedAt = metadataTime(db, "sync_stopped_at")
-
-	if status.SyncPID != "" {
-		running := processRunning(status.SyncPID)
-		status.SyncProcessRunning = &running
-	}
-
-	if latest, ok, err := db.GetLatestMessageTime(); err == nil && ok {
-		status.LatestMessageTime = &latest
-		age := int64(time.Since(latest).Seconds())
-		status.LatestMessageAgeSec = &age
-		status.Stale = time.Since(latest) > statusStaleAfter
-	} else {
-		status.Stale = true
-	}
-
-	if status.SyncHeartbeatAt != nil && time.Since(*status.SyncHeartbeatAt) > statusStaleAfter {
-		status.Stale = true
-	}
-	if status.SyncLastError != "" || status.SyncState == "logged_out" || status.SyncState == "timeout" {
-		status.Healthy = false
-	} else {
-		processOK := status.SyncProcessRunning == nil || *status.SyncProcessRunning
-		status.Healthy = authenticated && !status.Stale && processOK
+		return err
 	}
 
 	if IsJSON() {
@@ -143,6 +90,67 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Last error:    %s\n", status.SyncLastError)
 	}
 	return nil
+}
+
+func collectSyncStatus(staleAfter time.Duration) (SyncStatus, error) {
+	if err := EnsureDirectories(); err != nil {
+		return SyncStatus{}, fmt.Errorf("failed to create directories: %w", err)
+	}
+
+	db, err := store.Open(GetMessagesDBPath())
+	if err != nil {
+		return SyncStatus{}, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.CloseQuietly()
+
+	client, err := whatsapp.New(db, GetStoreDir(), false, nil)
+	authenticated := err == nil && client.IsAuthenticated()
+
+	chatCount, _ := db.CountChats("")
+	msgCount, _ := db.CountMessages()
+	status := SyncStatus{
+		Authenticated:     authenticated,
+		StaleAfterSeconds: int64(staleAfter.Seconds()),
+		Chats:             chatCount,
+		Messages:          msgCount,
+	}
+
+	status.SyncState = metadataString(db, "sync_state")
+	status.SyncMode = metadataString(db, "sync_mode")
+	status.SyncPID = metadataString(db, "sync_pid")
+	status.SyncLastError = metadataString(db, "sync_last_error")
+	status.SyncStartedAt = metadataTime(db, "sync_started_at")
+	status.SyncConnectedAt = metadataTime(db, "sync_connected_at")
+	status.SyncHeartbeatAt = metadataTime(db, "sync_heartbeat_at")
+	status.SyncLastEventAt = metadataTime(db, "sync_last_event_at")
+	status.SyncLastMessageSeen = metadataTime(db, "sync_last_message_seen_at")
+	status.SyncCompletedAt = metadataTime(db, "sync_completed_at")
+	status.SyncStoppedAt = metadataTime(db, "sync_stopped_at")
+
+	if status.SyncPID != "" {
+		running := processRunning(status.SyncPID)
+		status.SyncProcessRunning = &running
+	}
+
+	if latest, ok, err := db.GetLatestMessageTime(); err == nil && ok {
+		status.LatestMessageTime = &latest
+		age := int64(time.Since(latest).Seconds())
+		status.LatestMessageAgeSec = &age
+		status.Stale = time.Since(latest) > staleAfter
+	} else {
+		status.Stale = true
+	}
+
+	if status.SyncHeartbeatAt != nil && time.Since(*status.SyncHeartbeatAt) > staleAfter {
+		status.Stale = true
+	}
+	if status.SyncLastError != "" || status.SyncState == "logged_out" || status.SyncState == "timeout" {
+		status.Healthy = false
+	} else {
+		processOK := status.SyncProcessRunning == nil || *status.SyncProcessRunning
+		status.Healthy = authenticated && !status.Stale && processOK
+	}
+	return status, nil
 }
 
 func metadataString(db *store.DB, key string) string {
