@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/eddmann/whatsapp-cli/internal/store"
 )
 
 var (
@@ -66,6 +68,7 @@ func runWatchdog(cmd *cobra.Command, args []string) error {
 			return outputWatchdogResult(result)
 		}
 		result.Restarted = true
+		recordWatchdogRestart()
 		time.Sleep(watchdogWait)
 		after, err := collectSyncStatus(watchdogStaleAfter)
 		if err != nil {
@@ -137,6 +140,20 @@ func outputWatchdogResult(result WatchdogResult) error {
 	}
 	fmt.Printf("WhatsApp sync watchdog: %s (%s)\n", result.Decision.Action, result.Decision.Reason)
 	return nil
+}
+
+func recordWatchdogRestart() {
+	db, err := store.Open(GetMessagesDBPath())
+	if err != nil {
+		return
+	}
+	defer db.CloseQuietly()
+	current := 0
+	if raw, ok, err := db.GetMetadata("sync_watchdog_restart_count"); err == nil && ok {
+		current = atoi(raw)
+	}
+	_ = db.SetMetadata("sync_watchdog_restart_count", fmt.Sprintf("%d", current+1))
+	_ = db.SetMetadata("sync_last_watchdog_restart_at", time.Now().Format(time.RFC3339))
 }
 
 func restartLaunchdService(label string) error {
