@@ -22,7 +22,7 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create db dir: %w", err)
 	}
 
-	connStr := fmt.Sprintf("file:%s?_foreign_keys=on", dbPath)
+	connStr := fmt.Sprintf("file:%s?_foreign_keys=on&_busy_timeout=10000", dbPath)
 	mdb, err := sql.Open("sqlite3", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open messages db: %w", err)
@@ -30,6 +30,8 @@ func Open(dbPath string) (*DB, error) {
 
 	// Configure for SQLite single-writer limitation
 	mdb.SetMaxOpenConns(1)
+	_, _ = mdb.Exec("PRAGMA journal_mode=WAL")
+	_, _ = mdb.Exec("PRAGMA busy_timeout=10000")
 
 	if err := migrate(mdb); err != nil {
 		_ = mdb.Close()
@@ -226,9 +228,47 @@ func (d *DB) GetLastSyncTime() (time.Time, error) {
 
 // SetLastSyncTime stores the last sync time.
 func (d *DB) SetLastSyncTime(t time.Time) error {
+	return d.SetMetadata("last_sync_time", t.Format(time.RFC3339))
+}
+
+// SetMetadata stores a string metadata value.
+func (d *DB) SetMetadata(key, value string) error {
 	_, err := d.Messages.Exec(
-		"INSERT INTO metadata (key, value) VALUES ('last_sync_time', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-		t.Format(time.RFC3339),
+		"INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+		key,
+		value,
 	)
 	return err
+}
+
+// GetMetadata retrieves a string metadata value.
+func (d *DB) GetMetadata(key string) (string, bool, error) {
+	var value sql.NullString
+	err := d.Messages.QueryRow("SELECT value FROM metadata WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows || !value.Valid {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value.String, true, nil
+}
+
+// GetLatestMessageTime returns the newest stored message timestamp.
+func (d *DB) GetLatestMessageTime() (time.Time, bool, error) {
+	var ts sql.NullString
+	err := d.Messages.QueryRow("SELECT MAX(timestamp) FROM messages").Scan(&ts)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !ts.Valid {
+		return time.Time{}, false, nil
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05-07:00", "2006-01-02 15:04:05Z07:00"} {
+		parsed, parseErr := time.Parse(layout, ts.String)
+		if parseErr == nil {
+			return parsed, true, nil
+		}
+	}
+	return time.Time{}, false, fmt.Errorf("failed to parse latest message timestamp %q", ts.String)
 }

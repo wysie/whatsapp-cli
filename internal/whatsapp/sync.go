@@ -12,6 +12,7 @@ import (
 
 // handleMessage processes real-time incoming messages and persists them.
 func (c *Client) handleMessage(msg *events.Message) {
+	c.SetSyncMetadata("sync_last_message_seen_at", msg.Info.Timestamp.Format(time.RFC3339))
 	chatJID := msg.Info.Chat.String()
 	sender := msg.Info.Sender.User
 	content := extractTextContent(msg.Message)
@@ -56,6 +57,7 @@ func (c *Client) handleMessage(msg *events.Message) {
 
 // handleHistorySync persists conversations and messages received during a history sync.
 func (c *Client) handleHistorySync(hs *events.HistorySync) HistorySyncResult {
+	c.SetSyncMetadata("sync_last_history_sync_at", time.Now().Format(time.RFC3339))
 	if hs == nil || hs.Data.Conversations == nil {
 		return HistorySyncResult{}
 	}

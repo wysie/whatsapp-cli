@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -55,6 +56,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not authenticated. Run 'whatsapp auth login' first")
 	}
 
+	_ = db.SetMetadata("sync_state", "starting")
+	_ = db.SetMetadata("sync_mode", syncModeName(syncFollow))
+	_ = db.SetMetadata("sync_pid", strconv.Itoa(os.Getpid()))
+	_ = db.SetMetadata("sync_started_at", time.Now().Format(time.RFC3339))
+
 	// Set up signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -76,9 +82,14 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	if syncFollow {
 		fmt.Fprintln(os.Stderr, "Connected. Syncing messages continuously. Press Ctrl+C to stop.")
+		_ = db.SetMetadata("sync_state", "following")
+		stopHeartbeat := startSyncHeartbeat(db)
+		defer stopHeartbeat()
 
 		// Run until interrupted
 		<-ctx.Done()
+		_ = db.SetMetadata("sync_state", "stopped")
+		_ = db.SetMetadata("sync_stopped_at", time.Now().Format(time.RFC3339))
 	} else {
 		fmt.Fprintln(os.Stderr, "Connected. Performing one-time sync...")
 
@@ -87,10 +98,17 @@ func runSync(cmd *cobra.Command, args []string) error {
 		select {
 		case <-ctx.Done():
 			// User interrupted
+			_ = db.SetMetadata("sync_state", "interrupted")
+			_ = db.SetMetadata("sync_last_error", "interrupted")
 		case <-client.SyncComplete:
 			fmt.Fprintln(os.Stderr, "History sync complete.")
+			_ = db.SetMetadata("sync_state", "completed")
+			_ = db.SetMetadata("sync_completed_at", time.Now().Format(time.RFC3339))
+			_ = db.SetMetadata("sync_last_error", "")
 		case <-time.After(syncTimeout):
 			fmt.Fprintln(os.Stderr, "Sync timeout reached.")
+			_ = db.SetMetadata("sync_state", "timeout")
+			_ = db.SetMetadata("sync_last_error", "sync timeout reached")
 		}
 	}
 
@@ -107,4 +125,29 @@ func runSync(cmd *cobra.Command, args []string) error {
 		"chats":    chatCount,
 		"messages": msgCount,
 	}, fmt.Sprintf("Synced %d chats, %d messages", chatCount, msgCount))
+}
+
+func syncModeName(follow bool) string {
+	if follow {
+		return "follow"
+	}
+	return "once"
+}
+
+func startSyncHeartbeat(db *store.DB) func() {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = db.SetMetadata("sync_heartbeat_at", time.Now().Format(time.RFC3339))
+			}
+		}
+	}()
+	_ = db.SetMetadata("sync_heartbeat_at", time.Now().Format(time.RFC3339))
+	return cancel
 }

@@ -82,7 +82,7 @@ func New(db *store.DB, baseDir string, verbose bool, logger *slog.Logger) (*Clie
 		return nil, fmt.Errorf("failed to create store dir: %w", err)
 	}
 
-	waDBURI := fmt.Sprintf("file:%s/session.db?_foreign_keys=on", baseDir)
+	waDBURI := fmt.Sprintf("file:%s/session.db?_foreign_keys=on&_busy_timeout=10000", baseDir)
 	container, err := sqlstore.New(context.Background(), "sqlite3", waDBURI, dbLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open session db: %w", err)
@@ -143,6 +143,22 @@ func (c *Client) Disconnect() {
 	if c.WA != nil && c.WA.IsConnected() {
 		c.WA.Disconnect()
 	}
+}
+
+// SetSyncMetadata records sync/follow health metadata. Errors are intentionally
+// logged only, because metadata should not break message ingestion.
+func (c *Client) SetSyncMetadata(key, value string) {
+	if c == nil || c.Store == nil {
+		return
+	}
+	if err := c.Store.SetMetadata(key, value); err != nil && c.Logger != nil {
+		c.Logger.Warn("failed to write sync metadata", "key", key, "err", err)
+	}
+}
+
+// TouchSyncEvent records the time at which the WhatsApp client last observed an event.
+func (c *Client) TouchSyncEvent() {
+	c.SetSyncMetadata("sync_last_event_at", time.Now().Format(time.RFC3339))
 }
 
 // Logout logs out and clears the session.
