@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	version = "0.2.1-wysie.2-dev"
+	version = "dev"
 
 	// Global flags
 	formatFlag   string

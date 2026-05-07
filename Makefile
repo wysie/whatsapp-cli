@@ -5,6 +5,9 @@
 BINARY := whatsapp
 BUILD_DIR := ./dist
 CMD_DIR := ./cmd/whatsapp
+VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || git describe --tags --always --dirty --match 'v*' 2>/dev/null || echo dev)
+VERSION := $(patsubst v%,%,$(VERSION))
+LDFLAGS := -X github.com/eddmann/whatsapp-cli/internal/cli.version=$(VERSION)
 
 help: ## Display this help message
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z\/_%-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
@@ -12,7 +15,7 @@ help: ## Display this help message
 ##@ Development
 
 build: ## Build binary with CGO for SQLite FTS5
-	CGO_ENABLED=1 go build -tags sqlite_fts5 -o $(BUILD_DIR)/$(BINARY) $(CMD_DIR)
+	CGO_ENABLED=1 go build -tags sqlite_fts5 -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY) $(CMD_DIR)
 
 install: build ## Install binary to GOPATH/bin
 	cp $(BUILD_DIR)/$(BINARY) $(GOPATH)/bin/$(BINARY)
